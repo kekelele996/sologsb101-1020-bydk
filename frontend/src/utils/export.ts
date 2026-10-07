@@ -7,11 +7,16 @@ import type { Rubbing } from '@/types/rubbing';
 import type { Loss } from '@/types/loss';
 import type { Seal } from '@/types/seal';
 import type { Compare } from '@/types/compare';
+import type { Collector } from '@/types/collector';
+import type { Colophon } from '@/types/colophon';
 import { STELE_FORM_LABEL } from '@/types/stele';
 import { INK_TONE_LABEL, RUBBING_METHOD_LABEL, RUBBING_STATE_LABEL } from '@/types/rubbing';
 import { LOSS_SEVERITY_LABEL, LOSS_TYPE_LABEL } from '@/types/loss';
 import { SEAL_TYPE_LABEL, sealPositionWeight } from '@/types/seal';
 import { COMPARE_CONCLUSION_LABEL } from '@/types/compare';
+import { colophonCollectorName } from '@/types/colophon';
+import { formatLifeSpan } from '@/types/collector';
+import { describeChallenge, findChallengingColophon, sortColophons } from './dating';
 import { diffLosses, encodeCoord, sortLosses } from './collate';
 import type { RubbingSnapshot } from './db';
 
@@ -44,19 +49,21 @@ function csvCell(value: string | number | null): string {
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-/** 编目卡：一块碑刻 + 其拓本 + 损泐 + 钤印 + 比对结论 */
+/** 编目卡：一块碑刻 + 其拓本 + 损泐 + 钤印 + 题跋 + 比对结论 */
 export function buildCatalogCard(
   stele: Stele,
   rubbings: Rubbing[],
   losses: Loss[],
   seals: Seal[],
   compares: Compare[],
+  colophons: Colophon[] = [],
+  collectors: Collector[] = [],
 ): string {
   const lines: string[] = [];
   lines.push(`【碑帖编目卡】${stele.title}`);
   lines.push(`年代：${stele.era || '待考'}　形制：${STELE_FORM_LABEL[stele.form]}　尺寸：${stele.sizeCm || '未测'}`);
   lines.push(`所在地：${stele.location || '未记'}　书者：${stele.calligrapher || '佚名'}`);
-  lines.push(`拓本数：${rubbings.length}　损泐字位：${losses.length} 条　钤印：${seals.length} 方`);
+  lines.push(`拓本数：${rubbings.length}　损泐字位：${losses.length} 条　钤印：${seals.length} 方　题跋：${colophons.length} 条`);
   lines.push('');
 
   [...rubbings]
@@ -66,8 +73,13 @@ export function buildCatalogCard(
       const rubbingSeals = seals
         .filter((seal) => seal.rubbingId === rubbing.id)
         .sort((a, b) => sealPositionWeight(a.position) - sealPositionWeight(b.position));
+      const rubbingColophons = sortColophons(colophons.filter((colophon) => colophon.rubbingId === rubbing.id));
+      const challenge = findChallengingColophon(rubbing, colophons, collectors);
+      const datingCell = rubbing.dateGuess || '年代待考';
       lines.push(
-        `第 ${rubbing.versionNo} 版　${RUBBING_METHOD_LABEL[rubbing.method]}　${INK_TONE_LABEL[rubbing.inkTone]}　${rubbing.paperType}　${rubbing.sizeCm || '尺寸未记'}　收藏号 ${rubbing.collectionNo || '未编'}　${rubbing.dateGuess || '年代待考'}　${RUBBING_STATE_LABEL[rubbing.state]}`,
+        `第 ${rubbing.versionNo} 版　${RUBBING_METHOD_LABEL[rubbing.method]}　${INK_TONE_LABEL[rubbing.inkTone]}　${rubbing.paperType}　${rubbing.sizeCm || '尺寸未记'}　收藏号 ${rubbing.collectionNo || '未编'}　${
+          challenge ? `纸墨断代 ${datingCell}【待核：${describeChallenge(challenge)}】` : datingCell
+        }　${RUBBING_STATE_LABEL[rubbing.state]}`,
       );
       lines.push(`　损泐字位（${rubbingLosses.length} 条）：`);
       if (rubbingLosses.length === 0) lines.push('　　无');
@@ -81,22 +93,44 @@ export function buildCatalogCard(
       rubbingSeals.forEach((seal) => {
         lines.push(`　　${seal.position}　${seal.sealText}　${SEAL_TYPE_LABEL[seal.sealType]}　${seal.transcription || ''}`);
       });
+      lines.push(`　题跋（${rubbingColophons.length} 条，按纪年先后）：`);
+      if (rubbingColophons.length === 0) lines.push('　　无');
+      rubbingColophons.forEach((colophon) => {
+        const name = colophonCollectorName(colophon, collectors);
+        const life = colophon.collectorKey ? `（${formatLifeSpanByName(collectors, colophon)}）` : '';
+        const claim = colophon.collectorKey ? '' : '〔待认领〕';
+        const yearSuffix = typeof colophon.dateYear === 'number' ? `〔约 ${colophon.dateYear} 年〕` : '';
+        lines.push(`　　${name}${life}${claim}　${colophon.dateText || '纪年待考'}${yearSuffix}　${colophon.text}`);
+      });
       lines.push('');
     });
 
   const steleCompares = compares.filter((compare) => compare.steleId === stele.id);
   lines.push(`版本比对记录（${steleCompares.length} 条）：`);
   if (steleCompares.length === 0) lines.push('　无');
+  const rubbingById = new Map(rubbings.map((rubbing) => [rubbing.id, rubbing]));
   steleCompares.forEach((compare) => {
-    const a = rubbings.find((item) => item.id === compare.rubbingIdA);
-    const b = rubbings.find((item) => item.id === compare.rubbingIdB);
+    const a = rubbingById.get(compare.rubbingIdA);
+    const b = rubbingById.get(compare.rubbingIdB);
+    // 比对任一方的纸墨断代被实物跋顶核，该比对结论一并转待核，写明顶核跋
+    const challengeA = a ? findChallengingColophon(a, colophons, collectors) : null;
+    const challengeB = b ? findChallengingColophon(b, colophons, collectors) : null;
+    const challenge = challengeA ?? challengeB;
     lines.push(
       `　${compare.date}　A：第 ${a?.versionNo ?? '?'} 版　B：第 ${b?.versionNo ?? '?'} 版　差异 ${compare.diffCount} 字　结论 ${
         COMPARE_CONCLUSION_LABEL[compare.conclusion]
-      }　操作人 ${compare.operator || '未填'}`,
+      }${challenge ? `【待核：${describeChallenge(challenge)}】` : ''}　操作人 ${compare.operator || '未填'}`,
     );
   });
   return lines.join('\n');
+}
+
+/** 编目卡用：现行名录生卒年展示（同藏家取考订组后发条目） */
+function formatLifeSpanByName(collectors: Collector[], colophon: Colophon): string {
+  const current = collectors
+    .filter((collector) => collector.collectorKey === colophon.collectorKey)
+    .sort((c1, c2) => c2.issuedAt - c1.issuedAt)[0];
+  return current ? formatLifeSpan(current.birthYear, current.deathYear) : '生卒待考';
 }
 
 /** 导出编目卡为文本文件 */
@@ -106,9 +140,15 @@ export function exportCatalogCard(
   losses: Loss[],
   seals: Seal[],
   compares: Compare[],
+  colophons: Colophon[] = [],
+  collectors: Collector[] = [],
 ): string {
   const filename = `${stele.title}-编目卡-${stampSuffix()}.txt`;
-  download(filename, buildCatalogCard(stele, rubbings, losses, seals, compares), 'text/plain;charset=utf-8');
+  download(
+    filename,
+    buildCatalogCard(stele, rubbings, losses, seals, compares, colophons, collectors),
+    'text/plain;charset=utf-8',
+  );
   return filename;
 }
 
@@ -118,6 +158,8 @@ export interface ExportContext {
   losses: Loss[];
   seals: Seal[];
   compares: Compare[];
+  colophons: Colophon[];
+  collectors: Collector[];
 }
 
 /** 全部碑刻的编目卡合订文本 */
@@ -131,6 +173,8 @@ export function buildAllCatalogCards(context: ExportContext): string {
         context.losses,
         context.seals,
         context.compares,
+        context.colophons,
+        context.collectors,
       ),
     )
     .join('\n\n————————————————\n\n');

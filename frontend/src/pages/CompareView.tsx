@@ -52,6 +52,9 @@ import {
   type CompareDraft,
 } from '@/types/compare';
 import { buildDiffText, copyText } from '@/utils/export';
+import { buildChallengeMap, describeChallenge, colophonYearValue } from '@/utils/dating';
+import { selectColophons, selectCollectors } from '@/stores/colophonSlice';
+import ReviewTag from '@/components/common/ReviewTag';
 import { encodeCoord } from '@/utils/collate';
 
 const FILTER_KEYS = ['type'] as const;
@@ -65,9 +68,17 @@ export default function CompareView() {
   const rubbings = useAppSelector(selectRubbings);
   const compares = useAppSelector(selectCompares);
   const losses = useAppSelector(selectLosses);
+  const colophons = useAppSelector(selectColophons);
+  const collectors = useAppSelector(selectCollectors);
   const compareAId = useAppSelector((state) => state.loss.compareAId);
   const compareBId = useAppSelector((state) => state.loss.compareBId);
   const currentSteleId = useAppSelector((state) => state.stele.currentSteleId);
+
+  /** 各拓本纸墨断代被实物跋顶核的映射；比对任一方被顶，本行结论转待核 */
+  const challengeMap = useMemo(
+    () => buildChallengeMap(rubbings, colophons, collectors),
+    [colophons, collectors, rubbings],
+  );
 
   const url = useFilterQuery(FILTER_KEYS);
   const [steleId, setSteleId] = useState<string>('');
@@ -103,6 +114,22 @@ export default function CompareView() {
   const rubbingB = steleRubbings.find((item) => item.id === compareBId);
   const diff = useLossDiff(compareAId ?? undefined, compareBId ?? undefined);
   const stele = steles.find((item) => item.id === steleId);
+
+  const challengeA = rubbingA ? challengeMap.get(rubbingA.id) : undefined;
+  const challengeB = rubbingB ? challengeMap.get(rubbingB.id) : undefined;
+  const pairChallenge = challengeA ?? challengeB;
+
+  /** 拓本最早可系年题跋，用于选择项提示实物纪年 */
+  const earliestColophonYearOf = (rubbingId: string): number | null => {
+    const years = colophons
+      .filter((item) => item.rubbingId === rubbingId)
+      .map((item) => colophonYearValue(item))
+      .filter((value): value is number => value !== null);
+    return years.length === 0 ? null : Math.min(...years);
+  };
+
+  const colophonCountOf = (rubbingId: string): number =>
+    colophons.filter((item) => item.rubbingId === rubbingId).length;
 
   const selects: FilterSelectConfig[] = [
     {
@@ -202,10 +229,17 @@ export default function CompareView() {
     {
       title: '断代结论',
       dataIndex: 'conclusion',
-      width: 110,
-      render: (value: CompareConclusion) => (
-        <Tag color={COMPARE_CONCLUSION_COLOR[value]}>{COMPARE_CONCLUSION_LABEL[value]}</Tag>
-      ),
+      width: 130,
+      render: (value: CompareConclusion, record) => {
+        const challenge =
+          challengeMap.get(record.rubbingIdA) ?? challengeMap.get(record.rubbingIdB);
+        return (
+          <Space direction="vertical" size={0}>
+            <Tag color={COMPARE_CONCLUSION_COLOR[value]}>{COMPARE_CONCLUSION_LABEL[value]}</Tag>
+            {challenge ? <ReviewTag challenge={challenge} /> : null}
+          </Space>
+        );
+      },
     },
     { title: '操作人', dataIndex: 'operator', width: 110, render: (value: string) => value || '未填' },
     {
@@ -275,10 +309,18 @@ export default function CompareView() {
           <Space size={6}>
             <Tag color="#2f3a34">A</Tag>
             <Select
-              style={{ minWidth: 180 }}
+              style={{ minWidth: 220 }}
               value={compareAId ?? undefined}
               placeholder="拓本 A"
-              options={steleRubbings.map((item) => ({ value: item.id, label: `第 ${item.versionNo} 版 · ${item.dateGuess || '年代待考'}` }))}
+              options={steleRubbings.map((item) => {
+                const year = earliestColophonYearOf(item.id);
+                return {
+                  value: item.id,
+                  label: `第 ${item.versionNo} 版 · ${item.dateGuess || '年代待考'}${
+                    year !== null ? ` · 跋早至 ${year} 年` : ''
+                  }`,
+                };
+              })}
               onChange={(value: string) => dispatch(setCompareA(value))}
             />
           </Space>
@@ -295,15 +337,26 @@ export default function CompareView() {
           <Space size={6}>
             <Tag color="#a8623a">B</Tag>
             <Select
-              style={{ minWidth: 180 }}
+              style={{ minWidth: 220 }}
               value={compareBId ?? undefined}
               placeholder="拓本 B"
-              options={steleRubbings.map((item) => ({ value: item.id, label: `第 ${item.versionNo} 版 · ${item.dateGuess || '年代待考'}` }))}
+              options={steleRubbings.map((item) => {
+                const year = earliestColophonYearOf(item.id);
+                return {
+                  value: item.id,
+                  label: `第 ${item.versionNo} 版 · ${item.dateGuess || '年代待考'}${
+                    year !== null ? ` · 跋早至 ${year} 年` : ''
+                  }`,
+                };
+              })}
               onChange={(value: string) => dispatch(setCompareB(value))}
             />
           </Space>
           <Typography.Text type="secondary">
             A 损泐 {diff.result.totalA} 条 · B 损泐 {diff.result.totalB} 条
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            A 题跋 {rubbingA ? colophonCountOf(rubbingA.id) : 0} 条 · B 题跋 {rubbingB ? colophonCountOf(rubbingB.id) : 0} 条
           </Typography.Text>
           <Button
             size="small"
@@ -379,12 +432,21 @@ export default function CompareView() {
         </Col>
 
         <Col xs={24} xl={9}>
+          {pairChallenge ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 14 }}
+              message="本行断代结论待核"
+              description={describeChallenge(pairChallenge)}
+            />
+          ) : null}
           <Alert
             type="info"
             showIcon
             style={{ marginBottom: 14 }}
             message="断代规则"
-            description="A 相对 B 多出的损泐说明 A 拓制更晚、石面更损；据此推断早本 / 晚本，差异全为程度不同或方向相反时判为待考。"
+            description="A 相对 B 多出的损泐说明 A 拓制更晚、石面更损；据此推断早本 / 晚本，差异全为程度不同或方向相反时判为待考。纸墨断代被实物跋文纪年顶核时，结论标记转为待核。"
           />
           <Card className="gb-table-card" title="比对记录" styles={{ body: { padding: 0 } }}>
             {compares.length === 0 ? (

@@ -1,8 +1,8 @@
 /**
  * IndexedDB 持久化层（Dexie 封装）
- * - 数据结构版本号与升级迁移逻辑（v1 → v2：Loss 增加 charNo 与复合索引，并按行号顺序重建历史字位记录）
- * - 五张业务表的增删改查与整库导入导出
- * - 首次打开自动播种三层互相引用的演示数据（幂等）
+ * - 数据结构版本号与升级迁移逻辑（v1 → v2：Loss 增加 charNo 与复合索引；v2 → v3：新增题跋与考订组藏家名录）
+ * - 七张业务表的增删改查与整库导入导出
+ * - 首次打开自动播种四层互相引用的演示数据（幂等）
  * 纯前端应用：不依赖任何后端服务或数据库。
  */
 import Dexie, { type Table } from 'dexie';
@@ -11,13 +11,16 @@ import type { Rubbing } from '@/types/rubbing';
 import type { Loss } from '@/types/loss';
 import type { Seal } from '@/types/seal';
 import type { Compare } from '@/types/compare';
+import type { Collector } from '@/types/collector';
+import type { Colophon } from '@/types/colophon';
 import { sortLosses } from './collate';
+import { writeLocalBatch } from './localWrite';
 
 /** 数据库名（README 与导出文件均使用该名称） */
 export const DB_NAME = 'gbrubbing';
 
 /** 当前数据结构版本号 */
-export const DB_SCHEMA_VERSION = 2;
+export const DB_SCHEMA_VERSION = 3;
 
 /** localStorage 侧少量元数据键 */
 export const LS_KEYS = {
@@ -85,6 +88,10 @@ class RubbingDatabase extends Dexie {
   losses!: Table<Loss, string>;
   seals!: Table<Seal, string>;
   compares!: Table<Compare, string>;
+  /** 历代藏家题跋，挂在拓本上 */
+  colophons!: Table<Colophon, string>;
+  /** 考订组维护下发的藏家名录（编目台只读） */
+  collectors!: Table<Collector, string>;
 
   constructor() {
     super(DB_NAME);
@@ -99,7 +106,7 @@ class RubbingDatabase extends Dexie {
     });
 
     // v2：Loss 增加 charNo 与 [rubbingId+lineNo+charNo] 复合索引，并按行号顺序重建历史字位记录
-    this.version(DB_SCHEMA_VERSION)
+    this.version(2)
       .stores({
         steles: 'id, title, era, form, location, updatedAt',
         rubbings: 'id, steleId, versionNo, method, inkTone, state, updatedAt',
@@ -128,6 +135,18 @@ class RubbingDatabase extends Dexie {
         });
         await table.bulkPut(sortLosses(rebuilt));
       });
+
+    // v3：新增题跋表与考订组藏家名录表。
+    // 旧库升级时两表为空即「按无跋显示」，不做任何历史回填；名录也等考订组重新下发。
+    this.version(DB_SCHEMA_VERSION).stores({
+      steles: 'id, title, era, form, location, updatedAt',
+      rubbings: 'id, steleId, versionNo, method, inkTone, state, updatedAt',
+      losses: 'id, rubbingId, lineNo, charNo, [rubbingId+lineNo+charNo], type, severity, updatedAt',
+      seals: 'id, rubbingId, sealType, position, updatedAt',
+      compares: 'id, steleId, rubbingIdA, rubbingIdB, conclusion, date, updatedAt',
+      colophons: 'id, rubbingId, collectorKey, updatedAt',
+      collectors: 'id, collectorKey, name, issuedAt, updatedAt',
+    });
   }
 }
 
@@ -224,12 +243,114 @@ export async function seedDatabase(): Promise<void> {
     { id: 'cmp_0201', steleId: 'stele_02', rubbingIdA: 'rub_0201', rubbingIdB: 'rub_0202', diffCount: 1, conclusion: 'late', operator: '傅砚', date: '2026-03-08', createdAt: now - day * 3, updatedAt: now - day * 3 },
   ];
 
-  await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares], async () => {
+  // 考订组藏家名录：端方保留两条下发版本，以 issuedAt 后发的一条（生卒 1861–1911）为现行
+  const collectors: Collector[] = [
+    {
+      id: 'col_duan_v1',
+      collectorKey: 'c_duanfang',
+      name: '端方',
+      birthYear: null,
+      deathYear: 1911,
+      courtesyNote: '字午桥，号匋斋，托忒克氏',
+      issuedAt: now - day * 120,
+      source: '考订组《近代藏家生卒初考》',
+      createdAt: now - day * 120,
+      updatedAt: now - day * 120,
+    },
+    {
+      id: 'col_duan_v2',
+      collectorKey: 'c_duanfang',
+      name: '端方',
+      birthYear: 1861,
+      deathYear: 1911,
+      courtesyNote: '字午桥，号匋斋，托忒克氏',
+      issuedAt: now - day * 14,
+      source: '考订组《近代藏家生卒订补》',
+      createdAt: now - day * 14,
+      updatedAt: now - day * 14,
+    },
+    {
+      id: 'col_miao',
+      collectorKey: 'c_miaoquansun',
+      name: '缪荃孙',
+      birthYear: 1844,
+      deathYear: 1919,
+      courtesyNote: '字炎之，号艺风，堂号艺风堂',
+      issuedAt: now - day * 90,
+      source: '考订组《艺风堂交游年表》',
+      createdAt: now - day * 90,
+      updatedAt: now - day * 90,
+    },
+    {
+      id: 'col_zhu',
+      collectorKey: 'c_zhuyizun',
+      name: '朱彝尊',
+      birthYear: 1629,
+      deathYear: 1709,
+      courtesyNote: '字锡鬯，号竹垞',
+      issuedAt: now - day * 88,
+      source: '考订组《曝书亭藏碑录》',
+      createdAt: now - day * 88,
+      updatedAt: now - day * 88,
+    },
+  ];
+
+  // 题跋按纪年先后展示；rub_0201 的康熙跋纪年早于「清中期拓」断代下限，会顶核断代
+  const colophons: Colophon[] = [
+    {
+      id: 'cln_010101',
+      rubbingId: 'rub_0101',
+      collectorKey: null,
+      collectorText: '古吴王氏',
+      dateText: '万历三十四年丙午夏五月',
+      dateYear: null,
+      text: '纸墨苍润，字口完好，明拓之佳者，宝藏之。',
+      createdAt: now - day * 42,
+      updatedAt: now - day * 42,
+    },
+    {
+      id: 'cln_010102',
+      rubbingId: 'rub_0101',
+      collectorKey: 'c_duanfang',
+      collectorText: '匋斋',
+      dateText: '光绪二十年甲午秋八月',
+      dateYear: null,
+      text: '礼器旧本，余于京师得之，与簠斋藏本可互证。',
+      createdAt: now - day * 30,
+      updatedAt: now - day * 30,
+    },
+    {
+      id: 'cln_020101',
+      rubbingId: 'rub_0201',
+      collectorKey: 'c_zhuyizun',
+      collectorText: '竹垞',
+      dateText: '康熙十九年庚申秋日',
+      dateYear: null,
+      text: '石门颂旧搨，拓手颇精，崖文未甚泐，携归曝书亭。',
+      createdAt: now - day * 32,
+      updatedAt: now - day * 32,
+    },
+    {
+      id: 'cln_020201',
+      rubbingId: 'rub_0202',
+      collectorKey: 'c_duanfang',
+      collectorText: '匋斋',
+      dateText: '光绪十七年辛卯冬',
+      dateYear: null,
+      text: '晚拓一纸，石花较前本为多，留以校勘。',
+      createdAt: now - day * 20,
+      updatedAt: now - day * 20,
+    },
+  ];
+
+  await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares, db.colophons, db.collectors], async () => {
     await db.steles.bulkPut(steles);
     await db.rubbings.bulkPut(rubbings);
     await db.losses.bulkPut(losses);
     await db.seals.bulkPut(seals);
     await db.compares.bulkPut(compares);
+    await db.collectors.bulkPut(collectors);
+    await db.colophons.bulkPut(colophons);
   });
 }
 
@@ -244,15 +365,21 @@ export interface RubbingSnapshot {
   losses: Loss[];
   seals: Seal[];
   compares: Compare[];
+  /** v3 起：历代藏家题跋 */
+  colophons: Colophon[];
+  /** v3 起：考订组藏家名录 */
+  collectors: Collector[];
 }
 
 export async function exportSnapshot(): Promise<RubbingSnapshot> {
-  const [steles, rubbings, losses, seals, compares] = await Promise.all([
+  const [steles, rubbings, losses, seals, compares, colophons, collectors] = await Promise.all([
     db.steles.toArray(),
     db.rubbings.toArray(),
     db.losses.toArray(),
     db.seals.toArray(),
     db.compares.toArray(),
+    db.colophons.toArray(),
+    db.collectors.toArray(),
   ]);
   return {
     app: DB_NAME,
@@ -263,6 +390,8 @@ export async function exportSnapshot(): Promise<RubbingSnapshot> {
     losses,
     seals,
     compares,
+    colophons,
+    collectors,
   };
 }
 
@@ -278,26 +407,49 @@ export function validateSnapshot(input: unknown): string {
   return '';
 }
 
+/**
+ * 旧结构备份归一化：v1/v2 备份没有题跋与名录集合，按空集合处理——
+ * 旧数据导入后即「按无跋显示」，不臆造题跋，名录等考订组重新下发。
+ */
+export function normalizeSnapshot(input: RubbingSnapshot): RubbingSnapshot {
+  return {
+    ...input,
+    colophons: Array.isArray(input.colophons) ? input.colophons : [],
+    collectors: Array.isArray(input.collectors) ? input.collectors : [],
+  };
+}
+
+const ALL_TABLES = [
+  db.steles,
+  db.rubbings,
+  db.losses,
+  db.seals,
+  db.compares,
+  db.colophons,
+  db.collectors,
+] as const;
+
 export async function clearAllTables(): Promise<void> {
-  await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares], async () => {
-    await Promise.all([
-      db.steles.clear(),
-      db.rubbings.clear(),
-      db.losses.clear(),
-      db.seals.clear(),
-      db.compares.clear(),
-    ]);
+  await db.transaction('rw', ALL_TABLES, async () => {
+    await Promise.all(ALL_TABLES.map((table) => table.clear()));
   });
 }
 
-export async function importSnapshot(snapshot: RubbingSnapshot): Promise<void> {
+export async function importSnapshot(rawSnapshot: RubbingSnapshot): Promise<void> {
+  // 旧版备份缺题跋 / 名录集合时补空集合，按无跋升级
+  const snapshot = normalizeSnapshot(rawSnapshot);
   await clearAllTables();
-  await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares], async () => {
-    await db.steles.bulkPut(snapshot.steles);
-    await db.rubbings.bulkPut(snapshot.rubbings);
-    await db.losses.bulkPut(snapshot.losses);
-    await db.seals.bulkPut(snapshot.seals);
-    await db.compares.bulkPut(snapshot.compares);
+  // 写库失败只重试本侧这批：逐表为一个批次提交，失败批次按原样重放，不扩大到其它表
+  await writeLocalBatch(async () => {
+    await db.transaction('rw', ALL_TABLES, async () => {
+      await db.steles.bulkPut(snapshot.steles);
+      await db.rubbings.bulkPut(snapshot.rubbings);
+      await db.losses.bulkPut(snapshot.losses);
+      await db.seals.bulkPut(snapshot.seals);
+      await db.compares.bulkPut(snapshot.compares);
+      await db.colophons.bulkPut(snapshot.colophons);
+      await db.collectors.bulkPut(snapshot.collectors);
+    });
   });
 }
 
@@ -307,23 +459,26 @@ export async function resetDatabase(): Promise<void> {
 }
 
 export async function countAll(): Promise<Record<string, number>> {
-  const [steles, rubbings, losses, seals, compares] = await Promise.all([
+  const [steles, rubbings, losses, seals, compares, colophons, collectors] = await Promise.all([
     db.steles.count(),
     db.rubbings.count(),
     db.losses.count(),
     db.seals.count(),
     db.compares.count(),
+    db.colophons.count(),
+    db.collectors.count(),
   ]);
-  return { steles, rubbings, losses, seals, compares };
+  return { steles, rubbings, losses, seals, compares, colophons, collectors };
 }
 
-/** 级联删除碑刻 → 拓本 → 损泐 / 钤印 / 比对 */
+/** 级联删除碑刻 → 拓本 → 损泐 / 钤印 / 题跋 / 比对（名录为考订组维护，不随本侧删除） */
 export async function removeSteleCascade(steleId: string): Promise<void> {
   const rubbingIds = (await db.rubbings.where('steleId').equals(steleId).toArray()).map((row) => row.id);
-  await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares], async () => {
+  await db.transaction('rw', ALL_TABLES, async () => {
     if (rubbingIds.length > 0) {
       await db.losses.where('rubbingId').anyOf(rubbingIds).delete();
       await db.seals.where('rubbingId').anyOf(rubbingIds).delete();
+      await db.colophons.where('rubbingId').anyOf(rubbingIds).delete();
     }
     await db.rubbings.where('steleId').equals(steleId).delete();
     await db.compares.where('steleId').equals(steleId).delete();
@@ -331,11 +486,12 @@ export async function removeSteleCascade(steleId: string): Promise<void> {
   });
 }
 
-/** 级联删除拓本 → 损泐 / 钤印 / 涉及的比对记录 */
+/** 级联删除拓本 → 损泐 / 钤印 / 题跋 / 涉及的比对记录 */
 export async function removeRubbingCascade(rubbingId: string): Promise<void> {
-  await db.transaction('rw', [db.rubbings, db.losses, db.seals, db.compares], async () => {
+  await db.transaction('rw', [db.rubbings, db.losses, db.seals, db.colophons, db.compares], async () => {
     await db.losses.where('rubbingId').equals(rubbingId).delete();
     await db.seals.where('rubbingId').equals(rubbingId).delete();
+    await db.colophons.where('rubbingId').equals(rubbingId).delete();
     const compares = await db.compares.toArray();
     const affected = compares.filter((row) => row.rubbingIdA === rubbingId || row.rubbingIdB === rubbingId);
     if (affected.length > 0) await db.compares.bulkDelete(affected.map((row) => row.id));

@@ -58,6 +58,9 @@ import {
 } from '@/types/stele';
 import { COMPARE_CONCLUSION_LABEL } from '@/types/compare';
 import type { Seal } from '@/types/seal';
+import { selectColophons, selectCollectors } from '@/stores/colophonSlice';
+import { buildChallengeMap, type DatingChallenge } from '@/utils/dating';
+import ReviewTag from '@/components/common/ReviewTag';
 
 const FILTER_KEYS = ['era', 'form'] as const;
 
@@ -74,7 +77,15 @@ export default function SteleList() {
   const rubbings = useAppSelector(selectRubbings);
   const losses = useAppSelector(selectLosses);
   const compares = useAppSelector(selectCompares);
+  const colophons = useAppSelector(selectColophons);
+  const collectors = useAppSelector(selectCollectors);
   const sealTable = useIdbTable<Seal>((database) => database.seals, { sortByUpdatedAt: false });
+
+  /** 全库断代顶核映射：拓本纸墨断代被哪条跋顶核 */
+  const challengeMap = useMemo(
+    () => buildChallengeMap(rubbings, colophons, collectors),
+    [colophons, collectors, rubbings],
+  );
 
   const url = useFilterQuery(FILTER_KEYS);
   const [open, setOpen] = useState(false);
@@ -97,19 +108,33 @@ export default function SteleList() {
 
   const statOfStele = (
     steleId: string,
-  ): { rubbings: number; diff: number; loss: number; seal: number; conclusion: string } => {
+  ): {
+    rubbings: number;
+    diff: number;
+    loss: number;
+    seal: number;
+    colophon: number;
+    conclusion: string;
+    challenge: DatingChallenge | undefined;
+  } => {
     const steleRubbings = rubbings.filter((rubbing) => rubbing.steleId === steleId);
     const rubbingIds = steleRubbings.map((rubbing) => rubbing.id);
     const steleCompares = compares.filter((compare) => compare.steleId === steleId);
     const lastCompare = [...steleCompares].sort((a, b) => b.date.localeCompare(a.date))[0];
+    // 最近一次比对的任一方被跋顶核，清单上的断代标记即转待核
+    const challenge = lastCompare
+      ? challengeMap.get(lastCompare.rubbingIdA) ?? challengeMap.get(lastCompare.rubbingIdB)
+      : undefined;
     return {
       rubbings: steleRubbings.length,
       diff: steleCompares.reduce((sum, compare) => sum + compare.diffCount, 0),
       loss: losses.filter((loss) => rubbingIds.includes(loss.rubbingId)).length,
       seal: sealTable.rows.filter((seal) => rubbingIds.includes(seal.rubbingId)).length,
+      colophon: colophons.filter((colophon) => rubbingIds.includes(colophon.rubbingId)).length,
       conclusion: lastCompare
         ? `${COMPARE_CONCLUSION_LABEL[lastCompare.conclusion]}（${lastCompare.date}）`
         : '尚无比对',
+      challenge,
     };
   };
 
@@ -118,13 +143,15 @@ export default function SteleList() {
       steles: steles.length,
       rubbings: rubbings.length,
       losses: losses.length,
+      colophons: colophons.length,
+      challenged: challengeMap.size,
       diff: compares.reduce((sum, compare) => sum + compare.diffCount, 0),
       catalogedPercent:
         rubbings.length === 0
           ? 0
           : Math.round((rubbings.filter((rubbing) => rubbing.state === 'cataloged').length / rubbings.length) * 100),
     }),
-    [compares, losses.length, rubbings, steles.length],
+    [challengeMap.size, colophons.length, compares, losses.length, rubbings, steles.length],
   );
 
   const openCreate = (): void => {
@@ -190,7 +217,8 @@ export default function SteleList() {
         <StatBadge label="碑刻总数" value={totals.steles} suffix="处" tone="primary" />
         <StatBadge label="拓本总数" value={totals.rubbings} suffix="份" tone="info" />
         <StatBadge label="损泐字位" value={totals.losses} suffix="条" tone="warning" />
-        <StatBadge label="累计差异字数" value={totals.diff} suffix="字" tone="danger" />
+        <StatBadge label="历代题跋" value={totals.colophons} suffix="条" tone="default" />
+        <StatBadge label="断代待核" value={totals.challenged} suffix="条" tone="danger" />
         <StatBadge label="已编目占比" value={`${totals.catalogedPercent}%`} percent={totals.catalogedPercent} tone="success" />
       </div>
 
@@ -258,9 +286,12 @@ export default function SteleList() {
                         已收拓本 <strong>{stat.rubbings}</strong> 份 · 损泐字位 {stat.loss} 条
                       </Typography.Text>
                       <Typography.Text>
-                        版本差异 <strong>{stat.diff}</strong> 字 · 钤印 {stat.seal} 方
+                        版本差异 <strong>{stat.diff}</strong> 字 · 钤印 {stat.seal} 方 · 题跋 {stat.colophon} 条
                       </Typography.Text>
-                      <Typography.Text type="secondary">最近断代：{stat.conclusion}</Typography.Text>
+                      <Space size={4} wrap align="center">
+                        <Typography.Text type="secondary">最近断代：{stat.conclusion}</Typography.Text>
+                        {stat.challenge ? <ReviewTag challenge={stat.challenge} /> : null}
+                      </Space>
                       <Space size={4} wrap>
                         {losses
                           .filter((loss) => rubbings.some((rubbing) => rubbing.id === loss.rubbingId && rubbing.steleId === stele.id))

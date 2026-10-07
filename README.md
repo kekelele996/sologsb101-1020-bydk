@@ -42,7 +42,7 @@ docker compose up -d --build      # 代码改动后重新构建
 | 语言 | TypeScript（`strict: true`，`noUnusedLocals`） | `npm run build` 内含 `tsc --noEmit` 类型检查 |
 | UI 组件库 | Ant Design 5（含 `@ant-design/icons`） | 表格、表单、对话框、字位网格、徽标 |
 | 构建工具 | Vite 5 | 开发服务器端口 22820 |
-| 状态管理 | Redux Toolkit 2 + React Redux 9 | `steleSlice` / `rubbingSlice` / `lossSlice` + `store.ts` 类型化 hooks |
+| 状态管理 | Redux Toolkit 2 + React Redux 9 | `steleSlice` / `rubbingSlice` / `lossSlice` / `colophonSlice` + `store.ts` 类型化 hooks |
 | 路由 | React Router 6（`createBrowserRouter`，history 模式） | nginx 侧配合 `try_files` 做 SPA fallback |
 | 本地存储 | Dexie 4（IndexedDB 封装）+ localStorage | 含数据结构版本号与 v1→v2 升级迁移 |
 | 容器化 | Docker 多阶段构建：`node:20-alpine` → `nginx:alpine` | 构建阶段类型检查 + 打包，运行阶段仅托管静态产物 |
@@ -68,9 +68,9 @@ npm run preview    # 本地预览构建产物（http://localhost:22820）
 | 路由 | 页面 | 主要职责 | 消费模型 |
 | --- | --- | --- | --- |
 | `/steles` | 碑刻与所在地台账 | 新建碑刻、按年代与形制筛选（同步 URL query），卡片回显已收拓本数、损泐字位与最近断代结论 | Stele、Rubbing、Loss、Compare |
-| `/rubbings` | 拓本登记 | 录入拓法、纸墨、尺寸与收藏号；同碑自动生成版本序号，钤印增删改与批量调整印别，批量改状态 | Rubbing、Seal、Stele |
+| `/rubbings` | 拓本登记 | 录入拓法、纸墨、尺寸与收藏号；同碑自动生成版本序号，钤印增删改与批量调整印别，题跋登记（藏家 / 纪年 / 跋语、待认领、名录只读面板），批量改状态；纸墨断代被跋顶核时标「断代待核」 | Rubbing、Seal、Colophon、Collector、Stele |
 | `/losses` | 损泐字位标注台 | 行号 × 字位网格逐格标注，批量改严重程度；选定基准拓本即时高亮差异字位 | Loss、Rubbing |
-| `/compare` | 同碑多版本比对与断代 | 选定 A/B 两拓本，按字位坐标比对损泐集合并排展示差异，推断早本 / 晚本 / 同版 / 待考并落库 | Compare、Loss、Rubbing |
+| `/compare` | 同碑多版本比对与断代 | 选定 A/B 两拓本，按字位坐标比对损泐集合并排展示差异，推断早本 / 晚本 / 同版 / 待考并落库；任一方纸墨断代被实物跋顶核时该结论行转待核并写明顶核跋 | Compare、Loss、Rubbing、Colophon、Collector |
 | `/export` | 编目卡生成与导出 | 按碑刻生成编目卡文本、合订导出、钤印明细、JSON 导入导出、损泐台账 CSV、清空重播种 | 全部模型 |
 
 `/` 与未匹配路径重定向到 `/steles`。筛选条件写入 URL query（`?kw=&method=&state=` 等），可直接分享带条件的链接。
@@ -82,12 +82,16 @@ npm run preview    # 本地预览构建产物（http://localhost:22820）
 | 模型 | 文件 | 关键字段 | 说明 |
 | --- | --- | --- | --- |
 | Stele 碑刻 | `src/types/stele.ts` | `id` `title` `era` `location` `form`（碑/碣/摩崖/墓志） `sizeCm` `calligrapher` | 新建后进入拓本登记，卡片回显拓本数与差异条数 |
-| Rubbing 拓本 | `src/types/rubbing.ts` | `id` `steleId` `versionNo` `method`（擦拓/扑拓/蝉翼拓） `paperType` `inkTone`（浓墨/淡墨） `sizeCm` `collectionNo` `dateGuess` `state`（待编目/已编目/待比对） | 同碑多份并存，版本序号自动生成 |
+| Rubbing 拓本 | `src/types/rubbing.ts` | `id` `steleId` `versionNo` `method`（擦拓/扑拓/蝉翼拓） `paperType` `inkTone`（浓墨/淡墨） `sizeCm` `collectionNo` `dateGuess` `state`（待编目/已编目/待比对） | 同碑多份并存，版本序号自动生成；纸墨断代 `dateGuess` 原样保留 |
 | Loss 损泐字位 | `src/types/loss.ts` | `id` `rubbingId` `lineNo` `charNo` `type`（缺字/裂痕/漫漶/石花） `severity`（轻/中/重） `note` | 按行列网格标注，同碑同字位自动并排对比 |
 | Seal 钤印 | `src/types/seal.ts` | `id` `rubbingId` `sealText` `position` `transcription` `sealType`（收藏印/鉴赏印/作者印） | 按位置排序展示，支持批量改印别 |
-| Compare 版本比对 | `src/types/compare.ts` | `id` `steleId` `rubbingIdA` `rubbingIdB` `diffCount` `conclusion`（早本/晚本/同版/待考） `operator` `date` | 选定两拓本即生成差异清单并回写断代结论 |
+| Compare 版本比对 | `src/types/compare.ts` | `id` `steleId` `rubbingIdA` `rubbingIdB` `diffCount` `conclusion`（早本/晚本/同版/待考） `operator` `date` | 选定两拓本即生成差异清单并回写断代结论；结论被跋顶核时展示侧转「待核」 |
+| Colophon 题跋 | `src/types/colophon.ts` | `id` `rubbingId` `collectorKey`（null=待认领） `collectorText`（题署照录） `dateText`（纪年原文） `dateYear`（推定公元年） `text`（跋语） | 一条记藏家、纪年、跋语，挂到拓本上按纪年先后排；跋语为编目员录文，名录修订不改它 |
+| Collector 藏家名录 | `src/types/collector.ts` | `id` `collectorKey` `name` `birthYear` `deathYear` `courtesyNote` `issuedAt` `source` | 考订组维护下发、编目台只读；同一 `collectorKey` 以 `issuedAt` 后发的生卒年为准，旧版本留痕 |
 
-数据结构版本号 `DB_SCHEMA_VERSION` 定义在 `src/utils/db.ts`，当前为 `v2`：`losses` 表增加 `charNo` 与 `[rubbingId+lineNo+charNo]` 复合索引，并在 Dexie `.upgrade()` 中按行号顺序为历史字位记录重建 `charNo`。
+**题跋顶核断代规则**（`src/utils/dating.ts`，纯派生、不改写旧字段）：编目员按纸墨给的 `dateGuess` 照旧保留；把纸墨断代换算为拓制不早于的下限公元年（如「清中期拓」=1736、「明拓」=1368），再取该拓本纪年最早、且公元年早于该下限的题跋，此跋即「顶核」：拓本年代判断、比对台涉及该拓本的那行结论、碑刻清单卡片的最近断代标记一律展示为**断代待核**，并写明是哪条跋（藏家 + 纪年原文 + 公元年）顶的。纪年无法换算（`dateYear=null`）的跋只展示、不顶核；待认领藏家的跋同样是实物证据，参与顶核。
+
+数据结构版本号 `DB_SCHEMA_VERSION` 定义在 `src/utils/db.ts`，当前为 `v3`：新增 `colophons` 与 `collectors` 两张表。**旧数据（v1/v2）升级后两表为空，即按无跋显示，不做任何回填**；旧版 JSON 备份导入时缺这两个集合也按空集合处理。v1→v2 曾为 `losses` 增加 `charNo` 与复合索引并在 `.upgrade()` 中重建历史字位。
 
 ---
 
@@ -97,13 +101,13 @@ npm run preview    # 本地预览构建产物（http://localhost:22820）
 sologsb101-1020/
 ├── frontend/                     # 前端源码
 │   ├── src/
-│   │   ├── types/                # stele.ts rubbing.ts loss.ts seal.ts compare.ts
-│   │   ├── stores/               # steleSlice.ts rubbingSlice.ts lossSlice.ts store.ts
-│   │   ├── components/common/    # LossTag.tsx FilterBar.tsx StatBadge.tsx EmptyPanel.tsx
+│   │   ├── types/                # stele.ts rubbing.ts loss.ts seal.ts compare.ts colophon.ts collector.ts
+│   │   ├── stores/               # steleSlice.ts rubbingSlice.ts lossSlice.ts colophonSlice.ts store.ts
+│   │   ├── components/common/    # LossTag.tsx FilterBar.tsx StatBadge.tsx EmptyPanel.tsx ReviewTag.tsx
 │   │   ├── hooks/                # useLossDiff.ts useIdbTable.ts
 │   │   ├── pages/                # SteleList.tsx RubbingList.tsx LossBoard.tsx CompareView.tsx ExportView.tsx
 │   │   ├── router/               # index.tsx
-│   │   ├── utils/                # collate.ts db.ts export.ts
+│   │   ├── utils/                # collate.ts dating.ts localWrite.ts db.ts export.ts
 │   │   ├── styles/               # main.css
 │   │   ├── App.tsx main.tsx
 │   ├── public/favicon.svg
@@ -123,9 +127,10 @@ sologsb101-1020/
 
 ## 七、数据存储说明
 
-- **IndexedDB（Dexie，数据库名 `gbrubbing`）**：5 张业务表 `steles` / `rubbings` / `losses` / `seals` / `compares`，由 `src/utils/db.ts` 统一定义 schema、版本号与升级迁移；`initDatabase()` 首次打开时自动播种**三层互相引用**的演示数据（Stele → Rubbing → Loss / Seal，另有 Stele → Compare，固定 id 如 `stele_01`、`rub_0101`、`loss_010101`），播种幂等，保证字位网格与比对台打开即有内容。
+- **IndexedDB（Dexie，数据库名 `gbrubbing`）**：7 张业务表 `steles` / `rubbings` / `losses` / `seals` / `compares` / `colophons` / `collectors`，由 `src/utils/db.ts` 统一定义 schema、版本号与升级迁移；`initDatabase()` 首次打开时自动播种**四层互相引用**的演示数据（Stele → Rubbing → Loss / Seal / Colophon，另有 Stele → Compare；Collector 为考订组名录，含端方新旧两条下发版本），固定 id 如 `stele_01`、`rub_0101`、`loss_010101`、`cln_010101`），播种幂等，保证字位网格、比对台与题跋弹窗打开即有内容。
+- **写库重试**：本应用无对端写，写库失败后只重试「本侧这批」（`src/utils/localWrite.ts` 的 `writeLocalBatch()`）——以提交时锁定的同一批记录为限重放（默认 3 次、指数退避），不扩成全表重写、不重拉其它来源。题跋的增改 / 批量提交与整库导入均走该封装。
 - **localStorage**：仅存元数据 —— `gbrubbing:db-version`（本地结构版本）、`gbrubbing:last-backup-at`（最近导出时间）、`gbrubbing:ui-prefs`（当前碑刻 / 拓本）。
-- **备份**：`/export` 页可导出 JSON（5 张表全量数据 + 结构版本号），导入时校验 `app` 字段与各集合数组完整性，覆盖导入前二次确认；另有编目卡 TXT 与损泐台账 CSV。
+- **备份**：`/export` 页可导出 JSON（7 张表全量数据 + 结构版本号），导入时校验 `app` 字段与各集合数组完整性（v1/v2 旧备份缺题跋 / 名录集合按空集合处理，即按无跋显示），覆盖导入前二次确认；另有编目卡 TXT 与损泐台账 CSV。
 - **隐私与无状态**：数据不上传任何服务器，容器不挂载命名卷；清理浏览器站点数据或更换浏览器会丢失档案，请定期导出备份。
 
 ---

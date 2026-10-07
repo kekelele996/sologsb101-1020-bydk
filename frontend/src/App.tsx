@@ -18,6 +18,7 @@ import { loadAll, useAppDispatch, useAppSelector } from './stores/store';
 import { selectSteles } from './stores/steleSlice';
 import { selectRubbings } from './stores/rubbingSlice';
 import { selectLosses } from './stores/lossSlice';
+import { selectColophons } from './stores/colophonSlice';
 import { initDatabase } from './utils/db';
 import { STELE_FORM_LABEL } from './types/stele';
 
@@ -32,6 +33,7 @@ export default function App() {
   const steles = useAppSelector(selectSteles);
   const rubbings = useAppSelector(selectRubbings);
   const losses = useAppSelector(selectLosses);
+  const colophons = useAppSelector(selectColophons);
   const currentSteleId = useAppSelector((state) => state.stele.currentSteleId);
 
   useEffect(() => {
@@ -94,6 +96,7 @@ export default function App() {
             </span>
             <span>拓本 {rubbings.length} 份</span>
             <span>损泐字位 {losses.length} 条</span>
+            <span>历代题跋 {colophons.length} 条</span>
           </Space>
         </div>
       </Sider>

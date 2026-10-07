@@ -37,6 +37,10 @@ import { selectCompares, selectLosses } from '@/stores/lossSlice';
 import { SEAL_TYPE_COLOR, SEAL_TYPE_LABEL, sealPositionWeight, type Seal, type SealType } from '@/types/seal';
 import { RUBBING_METHOD_LABEL, RUBBING_STATE_LABEL } from '@/types/rubbing';
 import { COMPARE_CONCLUSION_COLOR, COMPARE_CONCLUSION_LABEL } from '@/types/compare';
+import { colophonCollectorName, type Colophon } from '@/types/colophon';
+import { formatLifeSpan } from '@/types/collector';
+import { colophonYearValue, sortColophons } from '@/utils/dating';
+import { selectColophons, selectCollectors } from '@/stores/colophonSlice';
 import {
   DB_NAME,
   DB_SCHEMA_VERSION,
@@ -66,6 +70,8 @@ export default function ExportView() {
   const rubbings = useAppSelector(selectRubbings);
   const losses = useAppSelector(selectLosses);
   const compares = useAppSelector(selectCompares);
+  const colophons = useAppSelector(selectColophons);
+  const collectors = useAppSelector(selectCollectors);
   const sealTable = useIdbTable<Seal>((database) => database.seals, { sortByUpdatedAt: false });
 
   const [steleId, setSteleId] = useState<string>('');
@@ -81,8 +87,10 @@ export default function ExportView() {
       losses,
       seals: sealTable.rows,
       compares,
+      colophons,
+      collectors,
     }),
-    [compares, losses, rubbings, sealTable.rows, steles],
+    [colophons, collectors, compares, losses, rubbings, sealTable.rows, steles],
   );
 
   const allCardsLength = useMemo(() => buildAllCatalogCards(context).length, [context]);
@@ -96,9 +104,11 @@ export default function ExportView() {
             losses,
             sealTable.rows,
             compares,
+            colophons,
+            collectors,
           )
         : '请选择碑刻。',
-    [compares, losses, rubbings, sealTable.rows, stele],
+    [colophons, collectors, compares, losses, rubbings, sealTable.rows, stele],
   );
 
   const stat = useMemo(
@@ -108,12 +118,13 @@ export default function ExportView() {
       losses: losses.length,
       seals: sealTable.rows.length,
       compares: compares.length,
+      colophons: colophons.length,
       passPercent:
         compares.length === 0
           ? 0
           : Math.round((compares.filter((compare) => compare.conclusion !== 'pending').length / compares.length) * 100),
     }),
-    [compares, losses.length, rubbings.length, sealTable.rows.length, steles.length],
+    [colophons.length, compares, losses.length, rubbings.length, sealTable.rows.length, steles.length],
   );
 
   const handleExport = async (): Promise<void> => {
@@ -196,6 +207,32 @@ export default function ExportView() {
     [activeSteleId, rubbings, sealTable.rows],
   );
 
+  /** 该碑刻下全部题跋，跨拓本按纪年先后排 */
+  const colophonRows = useMemo(() => {
+    const rubbingIds = new Set(
+      rubbings.filter((rubbing) => rubbing.steleId === activeSteleId).map((rubbing) => rubbing.id),
+    );
+    return sortColophons(colophons.filter((colophon) => rubbingIds.has(colophon.rubbingId)));
+  }, [activeSteleId, colophons, rubbings]);
+
+  const colophonColumns: ColumnsType<Colophon> = [
+    { title: '纪年', dataIndex: 'dateText', width: 150, render: (value: string, record) => `${value || '纪年待考'}${colophonYearValue(record) !== null ? `（约 ${colophonYearValue(record)} 年）` : ''}` },
+    {
+      title: '藏家',
+      key: 'collector',
+      width: 120,
+      render: (_value, record) => {
+        const current = collectors
+          .filter((collector) => collector.collectorKey === record.collectorKey)
+          .sort((a, b) => b.issuedAt - a.issuedAt)[0];
+        return current
+          ? `${current.name}（${formatLifeSpan(current.birthYear, current.deathYear)}）`
+          : `${colophonCollectorName(record, collectors)}〔待认领〕`;
+      },
+    },
+    { title: '跋语', dataIndex: 'text', render: (value: string) => value || '—' },
+  ];
+
   return (
     <div>
       <div className="gb-page-head">
@@ -239,6 +276,7 @@ export default function ExportView() {
         <StatBadge label="拓本" value={stat.rubbings} suffix="份" tone="info" />
         <StatBadge label="损泐字位" value={stat.losses} suffix="条" tone="warning" />
         <StatBadge label="钤印" value={stat.seals} suffix="方" />
+        <StatBadge label="题跋" value={stat.colophons} suffix="条" tone="danger" />
         <StatBadge label="比对记录" value={stat.compares} suffix="条" tone="danger" />
         <StatBadge label="已定断代占比" value={`${stat.passPercent}%`} percent={stat.passPercent} tone="success" />
       </div>
@@ -271,6 +309,8 @@ export default function ExportView() {
                       losses,
                       sealTable.rows,
                       compares,
+                      colophons,
+                      collectors,
                     );
                     message.success(`已导出 ${filename}`);
                   }}
@@ -306,6 +346,8 @@ export default function ExportView() {
                       losses,
                       sealTable.rows,
                       compares,
+                      colophons,
+                      collectors,
                     );
                     message.success(`已导出 ${filename}（含全部碑刻）`);
                   }}
@@ -351,10 +393,33 @@ export default function ExportView() {
             )}
           </Card>
 
+          <Card
+            className="gb-table-card"
+            title={`题跋明细${stele ? ` · ${stele.title}` : ''}`}
+            styles={{ body: { padding: 0 } }}
+            style={{ marginTop: 16 }}
+          >
+            {colophonRows.length === 0 ? (
+              <EmptyPanel
+                title="该碑刻下暂无题跋"
+                description="旧数据升级后按无跋显示；可在拓本登记页的「题跋」对话框补录历代藏家跋语。"
+                size="small"
+              />
+            ) : (
+              <Table<Colophon>
+                rowKey="id"
+                size="small"
+                pagination={{ pageSize: 5 }}
+                columns={colophonColumns}
+                dataSource={colophonRows}
+              />
+            )}
+          </Card>
+
           <Card title="整库导出" style={{ marginTop: 16 }}>
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
               <Typography.Text type="secondary">
-                导出文件包含 5 张业务表全量数据与结构版本号，可在其他设备通过「导入 JSON」还原。
+                导出文件包含 7 张业务表全量数据（含题跋与考订组藏家名录）与结构版本号；旧版备份没有题跋 / 名录集合，导入后按无跋显示。可在其他设备通过「导入 JSON」还原。
               </Typography.Text>
               <Space wrap>
                 <Button icon={<CloudDownloadOutlined />} onClick={() => void handleExport()}>
