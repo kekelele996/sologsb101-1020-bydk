@@ -7,11 +7,14 @@ import type { Rubbing } from '@/types/rubbing';
 import type { Loss } from '@/types/loss';
 import type { Seal } from '@/types/seal';
 import type { Compare } from '@/types/compare';
+import type { Colophon } from '@/types/colophon';
+import type { Collector } from '@/types/collector';
 import { STELE_FORM_LABEL } from '@/types/stele';
 import { INK_TONE_LABEL, RUBBING_METHOD_LABEL, RUBBING_STATE_LABEL } from '@/types/rubbing';
 import { LOSS_SEVERITY_LABEL, LOSS_TYPE_LABEL } from '@/types/loss';
 import { SEAL_TYPE_LABEL, sealPositionWeight } from '@/types/seal';
-import { COMPARE_CONCLUSION_LABEL } from '@/types/compare';
+import { COMPARE_CONCLUSION_LABEL, compareReviewText } from '@/types/compare';
+import { isColophonClaimed } from './review';
 import { diffLosses, encodeCoord, sortLosses } from './collate';
 import type { RubbingSnapshot } from './db';
 
@@ -44,19 +47,23 @@ function csvCell(value: string | number | null): string {
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-/** 编目卡：一块碑刻 + 其拓本 + 损泐 + 钤印 + 比对结论 */
+/** 编目卡：一块碑刻 + 其拓本 + 损泐 + 钤印 + 题跋 + 比对结论 */
 export function buildCatalogCard(
   stele: Stele,
   rubbings: Rubbing[],
   losses: Loss[],
   seals: Seal[],
   compares: Compare[],
+  colophons: Colophon[] = [],
+  collectors: Collector[] = [],
 ): string {
   const lines: string[] = [];
   lines.push(`【碑帖编目卡】${stele.title}`);
   lines.push(`年代：${stele.era || '待考'}　形制：${STELE_FORM_LABEL[stele.form]}　尺寸：${stele.sizeCm || '未测'}`);
   lines.push(`所在地：${stele.location || '未记'}　书者：${stele.calligrapher || '佚名'}`);
-  lines.push(`拓本数：${rubbings.length}　损泐字位：${losses.length} 条　钤印：${seals.length} 方`);
+  lines.push(
+    `拓本数：${rubbings.length}　损泐字位：${losses.length} 条　钤印：${seals.length} 方　题跋：${colophons.length} 条`,
+  );
   lines.push('');
 
   [...rubbings]
@@ -66,9 +73,20 @@ export function buildCatalogCard(
       const rubbingSeals = seals
         .filter((seal) => seal.rubbingId === rubbing.id)
         .sort((a, b) => sealPositionWeight(a.position) - sealPositionWeight(b.position));
+      const rubbingColophons = colophons
+        .filter((colophon) => colophon.rubbingId === rubbing.id)
+        .sort((a, b) => {
+          if (a.eraYear !== null && b.eraYear !== null) return a.eraYear - b.eraYear;
+          if (a.eraYear !== null) return -1;
+          if (b.eraYear !== null) return 1;
+          return a.createdAt - b.createdAt;
+        });
       lines.push(
         `第 ${rubbing.versionNo} 版　${RUBBING_METHOD_LABEL[rubbing.method]}　${INK_TONE_LABEL[rubbing.inkTone]}　${rubbing.paperType}　${rubbing.sizeCm || '尺寸未记'}　收藏号 ${rubbing.collectionNo || '未编'}　${rubbing.dateGuess || '年代待考'}　${RUBBING_STATE_LABEL[rubbing.state]}`,
       );
+      if (rubbing.dateGuessReview === true) {
+        lines.push(`　【待核】纸墨断代被「${rubbing.reviewEraText || '纪年无考'} · ${rubbing.reviewCollectorName || '佚名藏家'}」跋顶翻，原断代照旧留存待核`);
+      }
       lines.push(`　损泐字位（${rubbingLosses.length} 条）：`);
       if (rubbingLosses.length === 0) lines.push('　　无');
       rubbingLosses.forEach((loss) => {
@@ -80,6 +98,16 @@ export function buildCatalogCard(
       if (rubbingSeals.length === 0) lines.push('　　无');
       rubbingSeals.forEach((seal) => {
         lines.push(`　　${seal.position}　${seal.sealText}　${SEAL_TYPE_LABEL[seal.sealType]}　${seal.transcription || ''}`);
+      });
+      lines.push(`　题跋（${rubbingColophons.length} 条，按纪年先后）：`);
+      if (rubbingColophons.length === 0) lines.push('　　无');
+      rubbingColophons.forEach((colophon) => {
+        const claimed = isColophonClaimed(colophon, collectors);
+        const year = colophon.eraYear !== null ? `（公元 ${colophon.eraYear}）` : '（纪年未考）';
+        lines.push(
+          `　　${colophon.eraText}${year}　${colophon.collectorName.trim() || '署名无考'}　${claimed ? '已认领' : '待认领'}`,
+        );
+        lines.push(`　　　${colophon.text || ''}`);
       });
       lines.push('');
     });
@@ -95,6 +123,7 @@ export function buildCatalogCard(
         COMPARE_CONCLUSION_LABEL[compare.conclusion]
       }　操作人 ${compare.operator || '未填'}`,
     );
+    if (compare.review === true) lines.push(`　　【待核】${compareReviewText(compare)}`);
   });
   return lines.join('\n');
 }
@@ -106,9 +135,15 @@ export function exportCatalogCard(
   losses: Loss[],
   seals: Seal[],
   compares: Compare[],
+  colophons: Colophon[] = [],
+  collectors: Collector[] = [],
 ): string {
   const filename = `${stele.title}-编目卡-${stampSuffix()}.txt`;
-  download(filename, buildCatalogCard(stele, rubbings, losses, seals, compares), 'text/plain;charset=utf-8');
+  download(
+    filename,
+    buildCatalogCard(stele, rubbings, losses, seals, compares, colophons, collectors),
+    'text/plain;charset=utf-8',
+  );
   return filename;
 }
 
@@ -118,6 +153,8 @@ export interface ExportContext {
   losses: Loss[];
   seals: Seal[];
   compares: Compare[];
+  colophons: Colophon[];
+  collectors: Collector[];
 }
 
 /** 全部碑刻的编目卡合订文本 */
@@ -131,6 +168,8 @@ export function buildAllCatalogCards(context: ExportContext): string {
         context.losses,
         context.seals,
         context.compares,
+        context.colophons,
+        context.collectors,
       ),
     )
     .join('\n\n————————————————\n\n');

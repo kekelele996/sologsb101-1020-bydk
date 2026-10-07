@@ -3,7 +3,7 @@
  * 维护拓本与钤印集合及筛选条件；同一碑刻下自动生成版本序号。
  */
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import { createId, db, removeRubbingCascade, renumberRubbings } from '@/utils/db';
+import { createId, db, recomputeReviews, removeRubbingCascade, renumberRubbings } from '@/utils/db';
 import {
   nextRubbingState,
   type Rubbing,
@@ -12,6 +12,7 @@ import {
   type RubbingState,
 } from '@/types/rubbing';
 import type { Seal, SealDraft, SealType } from '@/types/seal';
+import { loadLosses } from './lossSlice';
 import type { RootState } from './store';
 
 export interface RubbingFilters {
@@ -61,7 +62,10 @@ export const updateRubbing = createAsyncThunk(
   'rubbing/update',
   async (payload: { id: string; patch: Partial<Rubbing> }, { dispatch }) => {
     await db.rubbings.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
+    // 纸墨断代（dateGuess）被改动时，重新跑一遍跋文复核，待核标记随之翻转
+    if (payload.patch.dateGuess !== undefined) await recomputeReviews([payload.id]);
     await dispatch(loadRubbings());
+    await dispatch(loadLosses());
   },
 );
 

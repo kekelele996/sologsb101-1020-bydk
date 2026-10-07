@@ -28,8 +28,16 @@ export interface Rubbing {
   sizeCm: string;
   /** 收藏号 */
   collectionNo: string;
-  /** 年代判断 */
+  /** 年代判断（编目员看纸墨所给，跋文顶断后照旧保留） */
   dateGuess: string;
+  /** 年代判断是否待核：实物跋文早于 dateGuess 年代下限时置 true（v3 旧数据无此栏，按无跋 / 非待核显示） */
+  dateGuessReview?: boolean;
+  /** 顶翻纸墨断代的题跋 id */
+  reviewColophonId?: string | null;
+  /** 顶翻纸墨断代的题跋纪年原文 */
+  reviewEraText?: string | null;
+  /** 顶翻纸墨断代的题跋藏家署名 */
+  reviewCollectorName?: string | null;
   /** 状态 */
   state: RubbingState;
   createdAt: number;

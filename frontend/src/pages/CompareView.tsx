@@ -10,6 +10,7 @@ import {
   Button,
   Card,
   Col,
+  Drawer,
   Form,
   Input,
   Modal,
@@ -22,11 +23,12 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EditOutlined, SaveOutlined, SwapOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, FileTextOutlined, SaveOutlined, SwapOutlined } from '@ant-design/icons';
 import EmptyPanel from '@/components/common/EmptyPanel';
 import FilterBar, { useFilterQuery, type FilterSelectConfig } from '@/components/common/FilterBar';
 import LossTag from '@/components/common/LossTag';
 import StatBadge from '@/components/common/StatBadge';
+import ColophonList from '@/components/common/ColophonList';
 import { useLossDiff } from '@/hooks/useLossDiff';
 import { useAppDispatch, useAppSelector } from '@/stores/store';
 import { selectSteles, setCurrentStele } from '@/stores/steleSlice';
@@ -46,15 +48,24 @@ import {
   COMPARE_CONCLUSION_COLOR,
   COMPARE_CONCLUSION_LABEL,
   COMPARE_CONCLUSION_OPTIONS,
+  compareReviewText,
   createEmptyCompareDraft,
   type Compare,
   type CompareConclusion,
   type CompareDraft,
 } from '@/types/compare';
+import { selectColophons, selectCollectors } from '@/stores/colophonSlice';
 import { buildDiffText, copyText } from '@/utils/export';
 import { encodeCoord } from '@/utils/collate';
 
 const FILTER_KEYS = ['type'] as const;
+
+/** 拓本纸墨断代被跋顶翻时，A/B 选择器旁的短标记 */
+function compareRubbingReviewText(rubbing: { reviewEraText?: string | null; reviewCollectorName?: string | null }): string {
+  const who = rubbing.reviewCollectorName?.trim() || '佚名';
+  const era = rubbing.reviewEraText?.trim() || '纪年无考';
+  return `纸墨断代待核：${era} ${who}跋`;
+}
 
 export default function CompareView() {
   const { message } = AntdApp.useApp();
@@ -65,6 +76,8 @@ export default function CompareView() {
   const rubbings = useAppSelector(selectRubbings);
   const compares = useAppSelector(selectCompares);
   const losses = useAppSelector(selectLosses);
+  const colophons = useAppSelector(selectColophons);
+  const collectors = useAppSelector(selectCollectors);
   const compareAId = useAppSelector((state) => state.loss.compareAId);
   const compareBId = useAppSelector((state) => state.loss.compareBId);
   const currentSteleId = useAppSelector((state) => state.stele.currentSteleId);
@@ -73,6 +86,7 @@ export default function CompareView() {
   const [steleId, setSteleId] = useState<string>('');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Compare | null>(null);
+  const [colophonRubbingId, setColophonRubbingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (steleId.length === 0) {
@@ -202,9 +216,16 @@ export default function CompareView() {
     {
       title: '断代结论',
       dataIndex: 'conclusion',
-      width: 110,
-      render: (value: CompareConclusion) => (
-        <Tag color={COMPARE_CONCLUSION_COLOR[value]}>{COMPARE_CONCLUSION_LABEL[value]}</Tag>
+      width: 170,
+      render: (value: CompareConclusion, record) => (
+        <Space direction="vertical" size={2}>
+          <Tag color={COMPARE_CONCLUSION_COLOR[value]}>{COMPARE_CONCLUSION_LABEL[value]}</Tag>
+          {record.review === true ? (
+            <Tag color="warning" style={{ marginInlineStart: 0 }}>
+              {compareReviewText(record)}
+            </Tag>
+          ) : null}
+        </Space>
       ),
     },
     { title: '操作人', dataIndex: 'operator', width: 110, render: (value: string) => value || '未填' },
@@ -278,9 +299,15 @@ export default function CompareView() {
               style={{ minWidth: 180 }}
               value={compareAId ?? undefined}
               placeholder="拓本 A"
-              options={steleRubbings.map((item) => ({ value: item.id, label: `第 ${item.versionNo} 版 · ${item.dateGuess || '年代待考'}` }))}
+              options={steleRubbings.map((item) => ({
+                value: item.id,
+                label: `第 ${item.versionNo} 版 · ${item.dateGuess || '年代待考'}${item.dateGuessReview === true ? '（待核）' : ''}`,
+              }))}
               onChange={(value: string) => dispatch(setCompareA(value))}
             />
+            {rubbingA?.dateGuessReview === true ? (
+              <Tag color="warning">{compareRubbingReviewText(rubbingA)}</Tag>
+            ) : null}
           </Space>
           <Button
             size="small"
@@ -298,13 +325,25 @@ export default function CompareView() {
               style={{ minWidth: 180 }}
               value={compareBId ?? undefined}
               placeholder="拓本 B"
-              options={steleRubbings.map((item) => ({ value: item.id, label: `第 ${item.versionNo} 版 · ${item.dateGuess || '年代待考'}` }))}
+              options={steleRubbings.map((item) => ({
+                value: item.id,
+                label: `第 ${item.versionNo} 版 · ${item.dateGuess || '年代待考'}${item.dateGuessReview === true ? '（待核）' : ''}`,
+              }))}
               onChange={(value: string) => dispatch(setCompareB(value))}
             />
+            {rubbingB?.dateGuessReview === true ? (
+              <Tag color="warning">{compareRubbingReviewText(rubbingB)}</Tag>
+            ) : null}
           </Space>
           <Typography.Text type="secondary">
             A 损泐 {diff.result.totalA} 条 · B 损泐 {diff.result.totalB} 条
           </Typography.Text>
+          <Button size="small" icon={<FileTextOutlined />} onClick={() => setColophonRubbingId(compareAId ?? null)}>
+            A 实物跋（{colophons.filter((item) => item.rubbingId === compareAId).length}）
+          </Button>
+          <Button size="small" icon={<FileTextOutlined />} onClick={() => setColophonRubbingId(compareBId ?? null)}>
+            B 实物跋（{colophons.filter((item) => item.rubbingId === compareBId).length}）
+          </Button>
           <Button
             size="small"
             onClick={async () => {
@@ -384,8 +423,23 @@ export default function CompareView() {
             showIcon
             style={{ marginBottom: 14 }}
             message="断代规则"
-            description="A 相对 B 多出的损泐说明 A 拓制更晚、石面更损；据此推断早本 / 晚本，差异全为程度不同或方向相反时判为待考。"
+            description="A 相对 B 多出的损泐说明 A 拓制更晚、石面更损；据此推断早本 / 晚本，差异全为程度不同或方向相反时判为待考。实物题跋纪年早于纸墨断代时，结论一并转待核，并写明是哪条跋顶的。"
           />
+          {rubbingA?.dateGuessReview === true || rubbingB?.dateGuessReview === true ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 14 }}
+              message="纸墨断代待核"
+              description={
+                <Space direction="vertical" size={2}>
+                  {rubbingA?.dateGuessReview === true ? <span>A：{compareRubbingReviewText(rubbingA)}</span> : null}
+                  {rubbingB?.dateGuessReview === true ? <span>B：{compareRubbingReviewText(rubbingB)}</span> : null}
+                  <span>保存比对记录时该结论将自动挂待核标记；原断代结论照旧保留。</span>
+                </Space>
+              }
+            />
+          ) : null}
           <Card className="gb-table-card" title="比对记录" styles={{ body: { padding: 0 } }}>
             {compares.length === 0 ? (
               <EmptyPanel
@@ -449,6 +503,26 @@ export default function CompareView() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <Drawer
+        open={colophonRubbingId !== null}
+        onClose={() => setColophonRubbingId(null)}
+        title={
+          colophonRubbingId
+            ? `实物题跋 · 第 ${steleRubbings.find((item) => item.id === colophonRubbingId)?.versionNo ?? '?'} 版`
+            : '实物题跋'
+        }
+        width={560}
+      >
+        {colophonRubbingId ? (
+          <ColophonList
+            rubbingId={colophonRubbingId}
+            colophons={colophons}
+            collectors={collectors}
+            size="small"
+          />
+        ) : null}
+      </Drawer>
     </div>
   );
 }

@@ -3,7 +3,7 @@
  * 维护字位损泐集合、比对记录与比对 A/B 选择及筛选条件。
  */
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import { createId, db } from '@/utils/db';
+import { createId, db, recomputeReviews } from '@/utils/db';
 import type { Loss, LossDraft, LossSeverity, LossType } from '@/types/loss';
 import type { Compare, CompareDraft } from '@/types/compare';
 import { sortLosses } from '@/utils/collate';
@@ -82,14 +82,25 @@ export const saveCompare = createAsyncThunk('compare/save', async (draft: Compar
   const now = Date.now();
   const row: Compare = { ...draft, id: createId('cmp'), createdAt: now, updatedAt: now };
   await db.compares.put(row);
+  // 结论按人工选择落库，但涉及拓本若有更早的实物跋，该结论同步转待核
+  await recomputeReviews([row.rubbingIdA, row.rubbingIdB]);
   await dispatch(loadLosses());
   return row;
 });
 
 export const updateCompare = createAsyncThunk(
   'compare/update',
-  async (payload: { id: string; patch: Partial<Compare> }, { dispatch }) => {
+  async (payload: { id: string; patch: Partial<Compare> }, { dispatch, getState }) => {
+    const state = getState() as RootState;
+    const previous = state.loss.compares.find((item) => item.id === payload.id);
     await db.compares.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
+    const rubbingIds = [
+      previous?.rubbingIdA,
+      previous?.rubbingIdB,
+      payload.patch.rubbingIdA,
+      payload.patch.rubbingIdB,
+    ].filter((value): value is string => typeof value === 'string');
+    if (rubbingIds.length > 0) await recomputeReviews(Array.from(new Set(rubbingIds)));
     await dispatch(loadLosses());
   },
 );

@@ -34,9 +34,10 @@ import { loadAll } from '@/stores/store';
 import { selectSteles, setCurrentStele } from '@/stores/steleSlice';
 import { selectRubbings } from '@/stores/rubbingSlice';
 import { selectCompares, selectLosses } from '@/stores/lossSlice';
+import { selectColophons, selectCollectors } from '@/stores/colophonSlice';
 import { SEAL_TYPE_COLOR, SEAL_TYPE_LABEL, sealPositionWeight, type Seal, type SealType } from '@/types/seal';
 import { RUBBING_METHOD_LABEL, RUBBING_STATE_LABEL } from '@/types/rubbing';
-import { COMPARE_CONCLUSION_COLOR, COMPARE_CONCLUSION_LABEL } from '@/types/compare';
+import { COMPARE_CONCLUSION_COLOR, COMPARE_CONCLUSION_LABEL, compareReviewText } from '@/types/compare';
 import {
   DB_NAME,
   DB_SCHEMA_VERSION,
@@ -66,6 +67,8 @@ export default function ExportView() {
   const rubbings = useAppSelector(selectRubbings);
   const losses = useAppSelector(selectLosses);
   const compares = useAppSelector(selectCompares);
+  const colophons = useAppSelector(selectColophons);
+  const collectors = useAppSelector(selectCollectors);
   const sealTable = useIdbTable<Seal>((database) => database.seals, { sortByUpdatedAt: false });
 
   const [steleId, setSteleId] = useState<string>('');
@@ -81,8 +84,10 @@ export default function ExportView() {
       losses,
       seals: sealTable.rows,
       compares,
+      colophons,
+      collectors,
     }),
-    [compares, losses, rubbings, sealTable.rows, steles],
+    [colophons, collectors, compares, losses, rubbings, sealTable.rows, steles],
   );
 
   const allCardsLength = useMemo(() => buildAllCatalogCards(context).length, [context]);
@@ -96,9 +101,11 @@ export default function ExportView() {
             losses,
             sealTable.rows,
             compares,
+            colophons,
+            collectors,
           )
         : '请选择碑刻。',
-    [compares, losses, rubbings, sealTable.rows, stele],
+    [collectors, colophons, compares, losses, rubbings, sealTable.rows, stele],
   );
 
   const stat = useMemo(
@@ -108,12 +115,14 @@ export default function ExportView() {
       losses: losses.length,
       seals: sealTable.rows.length,
       compares: compares.length,
+      colophons: colophons.length,
+      reviews: rubbings.filter((rubbing) => rubbing.dateGuessReview === true).length,
       passPercent:
         compares.length === 0
           ? 0
           : Math.round((compares.filter((compare) => compare.conclusion !== 'pending').length / compares.length) * 100),
     }),
-    [compares, losses.length, rubbings.length, sealTable.rows.length, steles.length],
+    [colophons.length, compares, losses.length, rubbings, sealTable.rows.length, steles.length],
   );
 
   const handleExport = async (): Promise<void> => {
@@ -239,6 +248,8 @@ export default function ExportView() {
         <StatBadge label="拓本" value={stat.rubbings} suffix="份" tone="info" />
         <StatBadge label="损泐字位" value={stat.losses} suffix="条" tone="warning" />
         <StatBadge label="钤印" value={stat.seals} suffix="方" />
+        <StatBadge label="题跋" value={stat.colophons} suffix="条" tone="info" />
+        <StatBadge label="断代待核" value={stat.reviews} suffix="份" tone="danger" />
         <StatBadge label="比对记录" value={stat.compares} suffix="条" tone="danger" />
         <StatBadge label="已定断代占比" value={`${stat.passPercent}%`} percent={stat.passPercent} tone="success" />
       </div>
@@ -271,6 +282,8 @@ export default function ExportView() {
                       losses,
                       sealTable.rows,
                       compares,
+                      colophons,
+                      collectors,
                     );
                     message.success(`已导出 ${filename}`);
                   }}
@@ -306,6 +319,8 @@ export default function ExportView() {
                       losses,
                       sealTable.rows,
                       compares,
+                      colophons,
+                      collectors,
                     );
                     message.success(`已导出 ${filename}（含全部碑刻）`);
                   }}
@@ -354,7 +369,7 @@ export default function ExportView() {
           <Card title="整库导出" style={{ marginTop: 16 }}>
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
               <Typography.Text type="secondary">
-                导出文件包含 5 张业务表全量数据与结构版本号，可在其他设备通过「导入 JSON」还原。
+                导出文件包含 7 张业务表全量数据与结构版本号（含题跋、考订组藏家名录），可在其他设备通过「导入 JSON」还原。旧版备份缺题跋两表时按空集导入，升级后按无跋显示。
               </Typography.Text>
               <Space wrap>
                 <Button icon={<CloudDownloadOutlined />} onClick={() => void handleExport()}>
@@ -411,9 +426,12 @@ export default function ExportView() {
               {compares
                 .filter((compare) => compare.steleId === activeSteleId)
                 .map((compare) => (
-                  <Tag key={compare.id} color={COMPARE_CONCLUSION_COLOR[compare.conclusion]}>
-                    {compare.date} 比对结论：{COMPARE_CONCLUSION_LABEL[compare.conclusion]}（差异 {compare.diffCount} 字）
-                  </Tag>
+                  <Space key={compare.id} direction="vertical" size={2}>
+                    <Tag color={COMPARE_CONCLUSION_COLOR[compare.conclusion]}>
+                      {compare.date} 比对结论：{COMPARE_CONCLUSION_LABEL[compare.conclusion]}（差异 {compare.diffCount} 字）
+                    </Tag>
+                    {compare.review === true ? <Tag color="warning">{compareReviewText(compare)}</Tag> : null}
+                  </Space>
                 ))}
             </Space>
           </Card>

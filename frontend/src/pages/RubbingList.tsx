@@ -19,10 +19,11 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EditOutlined, PlusOutlined, TagsOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, FileTextOutlined, PlusOutlined, TagsOutlined } from '@ant-design/icons';
 import EmptyPanel from '@/components/common/EmptyPanel';
 import FilterBar, { useFilterQuery, type FilterSelectConfig } from '@/components/common/FilterBar';
 import StatBadge from '@/components/common/StatBadge';
+import ColophonList, { ReviewBanner } from '@/components/common/ColophonList';
 import { useAppDispatch, useAppSelector } from '@/stores/store';
 import { selectSteles, setCurrentStele } from '@/stores/steleSlice';
 import {
@@ -73,6 +74,7 @@ import {
   type SealType,
 } from '@/types/seal';
 import { selectLosses } from '@/stores/lossSlice';
+import { selectColophons, selectCollectors } from '@/stores/colophonSlice';
 import LossTag from '@/components/common/LossTag';
 
 const FILTER_KEYS = ['method', 'state'] as const;
@@ -88,6 +90,8 @@ export default function RubbingList() {
   const filtered = useAppSelector(selectFilteredRubbings);
   const seals = useAppSelector(selectSeals);
   const losses = useAppSelector(selectLosses);
+  const colophons = useAppSelector(selectColophons);
+  const collectors = useAppSelector(selectCollectors);
   const steleFilterId = useAppSelector((state) => state.rubbing.filters.steleId);
 
   const url = useFilterQuery(FILTER_KEYS);
@@ -101,6 +105,9 @@ export default function RubbingList() {
   const [editingSeal, setEditingSeal] = useState<Seal | null>(null);
   const [selectedSealIds, setSelectedSealIds] = useState<string[]>([]);
   const [batchSealType, setBatchSealType] = useState<SealType>('collection');
+
+  const [colophonOpen, setColophonOpen] = useState(false);
+  const [colophonRubbing, setColophonRubbing] = useState<Rubbing | null>(null);
 
   useEffect(() => {
     dispatch(setRubbingKeyword(url.keyword));
@@ -126,8 +133,10 @@ export default function RubbingList() {
       toCompare: rubbings.filter((rubbing) => rubbing.state === 'toCompare').length,
       seals: seals.length,
       losses: losses.length,
+      colophons: colophons.length,
+      reviews: rubbings.filter((rubbing) => rubbing.dateGuessReview === true).length,
     };
-  }, [losses.length, rubbings, seals.length]);
+  }, [colophons.length, losses.length, rubbings, seals.length]);
 
   const steleTitle = (steleId: string): string => steles.find((stele) => stele.id === steleId)?.title ?? steleId;
 
@@ -183,6 +192,11 @@ export default function RubbingList() {
     setSealOpen(true);
   };
 
+  const openColophons = (rubbing: Rubbing): void => {
+    setColophonRubbing(rubbing);
+    setColophonOpen(true);
+  };
+
   const submitSeal = async (): Promise<void> => {
     if (!sealRubbing) return;
     const values = await sealForm.validateFields();
@@ -216,11 +230,23 @@ export default function RubbingList() {
     { title: '墨色', dataIndex: 'inkTone', width: 90, render: (value: InkTone) => INK_TONE_LABEL[value] },
     { title: '尺寸', dataIndex: 'sizeCm', width: 110, render: (value: string) => value || '未记' },
     { title: '收藏号', dataIndex: 'collectionNo', width: 120, render: (value: string) => value || '未编' },
-    { title: '年代判断', dataIndex: 'dateGuess', width: 120, render: (value: string) => value || '待考' },
     {
-      title: '损泐 / 钤印',
+      title: '年代判断',
+      dataIndex: 'dateGuess',
+      width: 170,
+      render: (_value: string, record) => (
+        <Space direction="vertical" size={2}>
+          <Typography.Text>{record.dateGuess || '待考'}</Typography.Text>
+          {record.dateGuessReview === true ? (
+            <ReviewBanner eraText={record.reviewEraText} collectorName={record.reviewCollectorName} />
+          ) : null}
+        </Space>
+      ),
+    },
+    {
+      title: '损泐 / 钤印 / 题跋',
       key: 'counts',
-      width: 130,
+      width: 150,
       render: (_value, record) => (
         <Space direction="vertical" size={0}>
           <Typography.Text style={{ fontSize: 12 }}>
@@ -229,13 +255,16 @@ export default function RubbingList() {
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             钤印 {seals.filter((seal) => seal.rubbingId === record.id).length} 方
           </Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            题跋 {colophons.filter((colophon) => colophon.rubbingId === record.id).length} 条
+          </Typography.Text>
         </Space>
       ),
     },
     {
       title: '操作',
       key: 'action',
-      width: 250,
+      width: 330,
       render: (_value, record) => (
         <Space size={4} wrap>
           <Button size="small" type="link" onClick={() => void dispatch(advanceRubbingState(record.id))}>
@@ -243,6 +272,9 @@ export default function RubbingList() {
           </Button>
           <Button size="small" type="link" icon={<TagsOutlined />} onClick={() => openSeals(record)}>
             钤印
+          </Button>
+          <Button size="small" type="link" icon={<FileTextOutlined />} onClick={() => openColophons(record)}>
+            题跋
           </Button>
           <Button size="small" type="link" icon={<EditOutlined />} onClick={() => openEdit(record)}>
             编辑
@@ -304,6 +336,8 @@ export default function RubbingList() {
         <StatBadge label="已编目占比" value={`${stat.catalogedPercent}%`} percent={stat.catalogedPercent} tone="success" />
         <StatBadge label="待比对" value={stat.toCompare} suffix="份" tone="warning" />
         <StatBadge label="钤印总数" value={stat.seals} suffix="方" tone="info" />
+        <StatBadge label="题跋总数" value={stat.colophons} suffix="条" tone="primary" />
+        <StatBadge label="断代待核" value={stat.reviews} suffix="份" tone="danger" />
         <StatBadge label="损泐字位" value={stat.losses} suffix="条" tone="danger" />
       </div>
 
@@ -568,6 +602,41 @@ export default function RubbingList() {
                   />
                 ))}
             </Space>
+          </div>
+        ) : null}
+      </Modal>
+
+      {/* 题跋管理：藏家 / 纪年 / 跋语，按纪年先后排，断代被顶翻时在此写明 */}
+      <Modal
+        open={colophonOpen}
+        title={`题跋 · ${colophonRubbing ? `第 ${colophonRubbing.versionNo} 版（${steleTitle(colophonRubbing.steleId)}）` : ''}`}
+        onCancel={() => setColophonOpen(false)}
+        footer={null}
+        width={760}
+        destroyOnClose
+      >
+        {colophonRubbing ? (
+          <div>
+            <Space direction="vertical" size={2} style={{ width: '100%', marginBottom: 10 }}>
+              <Typography.Text type="secondary">
+                纸墨断代：{colophonRubbing.dateGuess || '待考'}（编目员所断，原样保留）
+              </Typography.Text>
+              {colophonRubbing.dateGuessReview === true ? (
+                <ReviewBanner
+                  eraText={colophonRubbing.reviewEraText}
+                  collectorName={colophonRubbing.reviewCollectorName}
+                />
+              ) : (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  实物跋文纪年不早于纸墨断代时，断代维持；更早的跋一登记，本行自动转待核。
+                </Typography.Text>
+              )}
+            </Space>
+            <ColophonList
+              rubbingId={colophonRubbing.id}
+              colophons={colophons}
+              collectors={collectors}
+            />
           </div>
         ) : null}
       </Modal>

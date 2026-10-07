@@ -22,6 +22,14 @@ export interface Compare {
   operator: string;
   /** 比对日期 yyyy-MM-dd */
   date: string;
+  /** 是否待核：涉及拓本上的实物跋文早于纸墨断代，结论被跋顶翻时置 true（v3 升级前旧数据无此栏，按非待核显示） */
+  review?: boolean;
+  /** 顶翻该结论的题跋 id */
+  reviewColophonId?: string | null;
+  /** 顶翻该结论的题跋纪年原文（冗余存档，写明是哪条跋顶的） */
+  reviewEraText?: string | null;
+  /** 题跋藏家署名（便于直接读出名目） */
+  reviewCollectorName?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -48,6 +56,14 @@ export const COMPARE_CONCLUSION_OPTIONS: ReadonlyArray<{ value: CompareConclusio
   { value: 'same', label: '同版' },
   { value: 'pending', label: '待考' },
 ];
+
+/** 待核标记文案：写明是哪条跋顶的 */
+export function compareReviewText(compare: Pick<Compare, 'review' | 'reviewEraText' | 'reviewCollectorName'>): string {
+  if (!compare.review) return '';
+  const who = compare.reviewCollectorName?.trim() || '佚名藏家';
+  const era = compare.reviewEraText?.trim() || '纪年无考';
+  return `待核：${era} ${who} 跋早于纸墨断代`;
+}
 
 export function createEmptyCompareDraft(steleId: string): CompareDraft {
   return {

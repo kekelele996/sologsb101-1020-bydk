@@ -47,6 +47,7 @@ import {
   setRubbingSteleFilter,
 } from '@/stores/rubbingSlice';
 import { selectCompares, selectLosses } from '@/stores/lossSlice';
+import { selectColophons } from '@/stores/colophonSlice';
 import {
   STELE_FORM_COLOR,
   STELE_FORM_LABEL,
@@ -56,7 +57,7 @@ import {
   type SteleDraft,
   type SteleForm,
 } from '@/types/stele';
-import { COMPARE_CONCLUSION_LABEL } from '@/types/compare';
+import { COMPARE_CONCLUSION_LABEL, compareReviewText } from '@/types/compare';
 import type { Seal } from '@/types/seal';
 
 const FILTER_KEYS = ['era', 'form'] as const;
@@ -74,6 +75,7 @@ export default function SteleList() {
   const rubbings = useAppSelector(selectRubbings);
   const losses = useAppSelector(selectLosses);
   const compares = useAppSelector(selectCompares);
+  const colophons = useAppSelector(selectColophons);
   const sealTable = useIdbTable<Seal>((database) => database.seals, { sortByUpdatedAt: false });
 
   const url = useFilterQuery(FILTER_KEYS);
@@ -97,7 +99,7 @@ export default function SteleList() {
 
   const statOfStele = (
     steleId: string,
-  ): { rubbings: number; diff: number; loss: number; seal: number; conclusion: string } => {
+  ): { rubbings: number; diff: number; loss: number; seal: number; conclusion: string; reviewText: string; colophon: number } => {
     const steleRubbings = rubbings.filter((rubbing) => rubbing.steleId === steleId);
     const rubbingIds = steleRubbings.map((rubbing) => rubbing.id);
     const steleCompares = compares.filter((compare) => compare.steleId === steleId);
@@ -110,6 +112,8 @@ export default function SteleList() {
       conclusion: lastCompare
         ? `${COMPARE_CONCLUSION_LABEL[lastCompare.conclusion]}（${lastCompare.date}）`
         : '尚无比对',
+      reviewText: lastCompare?.review === true ? compareReviewText(lastCompare) : '',
+      colophon: colophons.filter((colophon) => rubbingIds.includes(colophon.rubbingId)).length,
     };
   };
 
@@ -258,9 +262,14 @@ export default function SteleList() {
                         已收拓本 <strong>{stat.rubbings}</strong> 份 · 损泐字位 {stat.loss} 条
                       </Typography.Text>
                       <Typography.Text>
-                        版本差异 <strong>{stat.diff}</strong> 字 · 钤印 {stat.seal} 方
+                        版本差异 <strong>{stat.diff}</strong> 字 · 钤印 {stat.seal} 方 · 题跋 {stat.colophon} 条
                       </Typography.Text>
                       <Typography.Text type="secondary">最近断代：{stat.conclusion}</Typography.Text>
+                      {stat.reviewText ? (
+                        <Tag color="warning" style={{ marginInlineStart: 0 }}>
+                          {stat.reviewText}
+                        </Tag>
+                      ) : null}
                       <Space size={4} wrap>
                         {losses
                           .filter((loss) => rubbings.some((rubbing) => rubbing.id === loss.rubbingId && rubbing.steleId === stele.id))
